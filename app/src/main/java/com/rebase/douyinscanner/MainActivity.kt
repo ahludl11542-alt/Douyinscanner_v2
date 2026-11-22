@@ -9,7 +9,6 @@ import androidx.appcompat.app.AppCompatActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import java.io.File
 
 class MainActivity : AppCompatActivity() {
     private lateinit var output: TextView
@@ -86,16 +85,16 @@ class MainActivity : AppCompatActivity() {
                 val size = minOf(t.size, 8L * 1024 * 1024).toInt()
                 val bytes = MemScan.readMem(t.pid, t.start, size)
                 if (bytes == null) {
-                    log("\n坐标扫描: 读取失败 pid=${t.pid} 0x${t.start.toString(16)}")
+                    log("\n坐标扫描: 读取失败")
                     continue
                 }
-                log("\n== 坐标候选 pid=${t.pid} 区域0x${t.start.toString(16)} 读取${bytes.size}B ==")
+                log("\n== 坐标候选 读取${bytes.size}B ==")
                 var any = false
                 for (stride in intArrayOf(12, 16, 64)) {
                     val runs = MemScan.findVec3Runs(bytes, t.start, stride, 4, 5)
-                    for ((addr, count) in runs) {
+                    for (pair in runs) {
                         any = true
-                        log("stride=$stride 起始0x${addr.toString(16)} 连续Vec3=$count")
+                        log("stride=$stride 起始0x${pair.first.toString(16)} 连续Vec3=${pair.second}")
                     }
                 }
                 if (!any) log("未发现连续 Vec3 候选。")
@@ -112,10 +111,17 @@ class MainActivity : AppCompatActivity() {
                 val size = minOf(t.size, 8L * 1024 * 1024).toInt()
                 val bytes = MemScan.readMem(t.pid, t.start, size)
                 if (bytes == null) {
-                    log("\n矩阵扫描: 读取失败 pid=${t.pid} 0x${t.start.toString(16)}")
+                    log("\n矩阵扫描: 读取失败")
                     continue
                 }
-                log("\n== 矩阵候选 pid=${t.pid} 区域0x${t.start.toString(16)} 读取${bytes.size}B ==")
+                log("\n== 矩阵候选 读取${bytes.size}B ==")
                 val hits = MemScan.findMatrixCandidates(bytes, t.start, 20)
                 if (hits.isEmpty()) log("未发现矩阵候选。")
-                for (h in hits) log("矩阵候选 0x$
+                for (h in hits) log("矩阵候选 0x${h.toString(16)}")
+            }
+            log("\n矩阵扫描结束。以上均为启发式候选，未验证。")
+        }
+    }
+
+    private fun dumpFirst() {
+        val e = candidates.maxByOrNull { it.size } ?
