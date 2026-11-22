@@ -20,108 +20,103 @@ class MainActivity : AppCompatActivity() {
         val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
 
-        row1.addView(mkButton("扫描进程/内存") { scan() })
-        row1.addView(mkButton("Hexdump最大") { dumpFirst() })
-        row2.addView(mkButton("扫坐标候选") { scanCoords() })
-        row2.addView(mkButton("扫矩阵候选") { scanMatrices() })
+        row1.addView(makeButton("扫描") { scan() })
+        row1.addView(makeButton("Hexdump") { dumpFirst() })
+        row2.addView(makeButton("扫坐标") { scanCoords() })
+        row2.addView(makeButton("扫矩阵") { scanMatrices() })
 
         output = TextView(this).apply {
             textSize = 10f
             setTextIsSelectable(true)
-            setPadding(16, 16, 16, 16)
         }
         val scroll = ScrollView(this).apply { addView(output) }
         root.addView(row1)
         root.addView(row2)
-        root.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        root.addView(scroll, LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
         setContentView(root)
     }
 
-    private fun mkButton(text: String, action: () -> Unit) = Button(this).apply {
+    private fun makeButton(text: String, action: () -> Unit) = Button(this).apply {
         this.text = text
         setOnClickListener { action() }
     }
 
-    private fun log(s: String) { runOnUiThread { output.append(s + "\n") } }
+    private fun log(s: String) { runOnUiThread { output.append("$s\n") } }
 
     private fun scan() {
         output.text = ""
         candidates.clear()
         CoroutineScope(Dispatchers.IO).launch {
             val id = MemScan.su("id").trim()
-            log("root 检查: $id")
-            if (!id.contains("uid=0")) {
-                log("未获得 root，无法读取其它应用的 /proc。")
-                return@launch
-            }
+            log("root: $id")
+            if (!id.contains("uid=0")) { log("未获得 root"); return@launch }
+            
             val ps = MemScan.su("ps -A")
-            val procs = ps.lines().filter { it.contains("aweme", ignoreCase = true) }
-            if (procs.isEmpty()) {
-                log("未找到抖音进程。请先启动抖音并进入小游戏，再点扫描。")
-                return@launch
-            }
+            val procs = ps.lines().filter { it.contains("aweme", true) }
+            if (procs.isEmpty()) { log("未找到抖音进程"); return@launch }
+
             for (line in procs) {
-                val pid = line.trim().split(Regex("\\s+")).getOrNull(0)?.toLongOrNull() ?: continue
-                val maps = MemScan.su("cat /proc/$pid/maps")
+                val parts = line.trim().split(Regex("\\s+"))
+                if (parts.isEmpty()) continue
+                val pidStr = parts[0]
+                val pidVal = pidStr.toLongOrNull() ?: continue
+                
+                val maps = MemScan.su("cat /proc/$pidVal/maps")
                 val cand = mutableListOf<MapEntry>()
                 for (ml in maps.lines()) {
-                    val e = MapEntry.parse(pid, ml) ?: continue
+                    val e = MapEntry.parse(pidVal, ml) ?: continue
                     if (e.isBigRwAnon()) cand.add(e)
                 }
                 cand.sortByDescending { it.size }
-                log("\n== PID $pid  候选 ${cand.size} 个 ==")
-                for (e in cand.take(30)) log(e.toString())
+                log("PID $pidVal 候选 ${cand.size} 个")
+                for (e in cand.take(10)) log(e.toString())
                 candidates.addAll(cand)
             }
-            log("\n扫描完成。共 ${candidates.size} 个候选。")
+            log("扫描完成，共 ${candidates.size} 个候选")
         }
     }
 
     private fun scanCoords() {
-        if (candidates.isEmpty()) { log("先扫描进程/内存。"); return }
-        val targets = candidates.sortedByDescending { it.size }.take(5)
+        if (candidates.isEmpty()) { log("请先扫描"); return }
+        val targets = candidates.sortedByDescending { it.size }.take(3)
         CoroutineScope(Dispatchers.IO).launch {
             for (t in targets) {
-                val size = minOf(t.size, 8L * 1024 * 1024).toInt()
-                val bytes = MemScan.readMem(t.pid, t.start, size)
-                if (bytes == null) {
-                    log("\n坐标扫描: 读取失败")
-                    continue
-                }
-                log("\n== 坐标候选 读取${bytes.size}B ==")
-                var any = false
+                val bytes = MemScan.readMem(t.pid, t.start, 4 * 1024 * 1024)
+                if (bytes == null) { log("读取失败"); continue }
+                log("== 坐标扫描 区域0x${t.start.toString(16)} ==")
                 for (stride in intArrayOf(12, 16, 64)) {
                     val runs = MemScan.findVec3Runs(bytes, t.start, stride, 4, 5)
-                    for (pair in runs) {
-                        any = true
-                        log("stride=$stride 起始0x${pair.first.toString(16)} 连续Vec3=${pair.second}")
-                    }
+                    for (r in runs) log("stride=$stride 地址0x${r.first.toString(16)}")
                 }
-                if (!any) log("未发现连续 Vec3 候选。")
             }
-            log("\n坐标扫描结束。以上均为启发式候选，未验证。")
+            log("坐标扫描完成")
         }
     }
 
     private fun scanMatrices() {
-        if (candidates.isEmpty()) { log("先扫描进程/内存。"); return }
-        val targets = candidates.sortedByDescending { it.size }.take(5)
+        if (candidates.isEmpty()) { log("请先扫描"); return }
+        val targets = candidates.sortedByDescending { it.size }.take(3)
         CoroutineScope(Dispatchers.IO).launch {
             for (t in targets) {
-                val size = minOf(t.size, 8L * 1024 * 1024).toInt()
-                val bytes = MemScan.readMem(t.pid, t.start, size)
-                if (bytes == null) {
-                    log("\n矩阵扫描: 读取失败")
-                    continue
-                }
-                log("\n== 矩阵候选 读取${bytes.size}B ==")
+                val bytes = MemScan.readMem(t.pid, t.start, 4 * 1024 * 1024)
+                if (bytes == null) { log("读取失败"); continue }
+                log("== 矩阵扫描 区域0x${t.start.toString(16)} ==")
                 val hits = MemScan.findMatrixCandidates(bytes, t.start, 20)
-                if (hits.isEmpty()) log("未发现矩阵候选。")
                 for (h in hits) log("矩阵候选 0x${h.toString(16)}")
             }
-            log("\n矩阵扫描结束。以上均为启发式候选，未验证。")
+            log("矩阵扫描完成")
         }
     }
 
     private fun dumpFirst() {
-        val e = candidates.maxByOrNull { it.size } ?
+        val e = candidates.maxByOrNull { it.size } ?: run { log("请先扫描"); return }
+        CoroutineScope(Dispatchers.IO).launch {
+            val bytes = MemScan.readMem(e.pid, e.start, 512)
+            if (bytes == null || bytes.isEmpty()) { log("读取失败"); return@launch }
+            log("== Hexdump 0x${e.start.toString(16)} ==")
+            for (i in bytes.indices step 16) {
+                val sb = StringBuilder()
+                sb.append("%08x  ".format(e.start + i))
+                for (j in 0 until 16) {
+                    if (i + j < bytes.size) sb.append("%02x ".format(bytes[i + j].toInt() and 0xFF))
+              
